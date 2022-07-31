@@ -14,7 +14,7 @@ func TestHeartbeatMonitor(t *testing.T) {
 		cfg             Config
 		testRunDuration time.Duration
 		runner          func(context.Context, *Heartbeat)
-		healthEvaluator func(context.Context, <-chan bool, *assert.Assertions) chan interface{}
+		healthEvaluator func([]bool, *assert.Assertions)
 	}{
 		{
 			name:            "monitor should remain healthy with a well-behaving runner",
@@ -32,25 +32,8 @@ func TestHeartbeatMonitor(t *testing.T) {
 					}
 				}
 			},
-			healthEvaluator: func(ctx context.Context, c <-chan bool, assertions *assert.Assertions) chan interface{} {
-				done := make(chan interface{})
-
-				go func() {
-					defer close(done)
-					healthStatusSlice := make([]bool, 0)
-					for {
-						select {
-						case healthy := <-c:
-							healthStatusSlice = append(healthStatusSlice, healthy)
-						case <-ctx.Done():
-							assertions.ElementsMatch([]bool{true}, healthStatusSlice)
-							return
-						}
-					}
-
-				}()
-
-				return done
+			healthEvaluator: func(healthStatusSlice []bool, assertions *assert.Assertions) {
+				assertions.ElementsMatch([]bool{true}, healthStatusSlice)
 			},
 		},
 		{
@@ -71,24 +54,8 @@ func TestHeartbeatMonitor(t *testing.T) {
 					}
 				}
 			},
-			healthEvaluator: func(ctx context.Context, c <-chan bool, assertions *assert.Assertions) chan interface{} {
-				done := make(chan interface{})
-
-				go func() {
-					defer close(done)
-					healthStatusSlice := make([]bool, 0)
-					for {
-						select {
-						case healthy := <-c:
-							healthStatusSlice = append(healthStatusSlice, healthy)
-						case <-ctx.Done():
-							assertions.ElementsMatch([]bool{true, false}, healthStatusSlice)
-							return
-						}
-					}
-				}()
-
-				return done
+			healthEvaluator: func(healthStatusSlice []bool, assertions *assert.Assertions) {
+				assertions.ElementsMatch([]bool{true, false}, healthStatusSlice)
 			},
 		},
 	}
@@ -98,8 +65,18 @@ func TestHeartbeatMonitor(t *testing.T) {
 			assertions := assert.New(t)
 
 			heartbeat := New(tt.cfg)
+			healthStatusSlice := make([]bool, 0)
+
+			shouldTrigger := func(healthy bool) bool {
+				return true
+			}
+
+			trigger := func (healthy bool) {
+				healthStatusSlice= append(healthStatusSlice, healthy)
+			}
 
 			monitor := NewMonitor(heartbeat, tt.cfg)
+			monitor.RegisterListener(HealthListenerFunction(shouldTrigger, trigger))
 
 			ctx, cancelFunc := context.WithCancel(context.Background())
 
@@ -108,15 +85,14 @@ func TestHeartbeatMonitor(t *testing.T) {
 			err := monitor.Start()
 			assertions.NoError(err)
 
-			done := tt.healthEvaluator(ctx, monitor.HealthChan(), assertions)
-
+			
 			<-time.After(tt.testRunDuration)
 			cancelFunc()
-
+			
 			err = monitor.Close()
 			assertions.NoError(err)
-
-			<-done
+			
+			tt.healthEvaluator(healthStatusSlice, assertions)
 		})
 	}
 }

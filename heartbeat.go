@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -70,11 +69,40 @@ func (h *Heartbeat) Close() error {
 	return nil
 }
 
+type HealthListener interface {
+	ShouldTrigger(healthy bool) bool
+	Trigger(healthy bool)
+}
+
+type healthListenerHandler struct {
+	shouldTrigger func(healthy bool) bool
+	trigger func(healthy bool)
+}
+
+func HealthListenerFunction(shouldTrigger func(healthy bool) bool, trigger func(healthy bool)) HealthListener {
+	return &healthListenerHandler{
+		shouldTrigger: shouldTrigger,
+		trigger: trigger,
+	}
+}
+
+func (h *healthListenerHandler) ShouldTrigger(healthy bool) bool {
+	return h.shouldTrigger(healthy)
+}
+
+func (h *healthListenerHandler) Trigger(healthy bool) {
+	h.trigger(healthy)
+}
+
 type Monitor struct {
-	healthChan  chan bool
-	healthState int32
+	healthState bool
+	mutex sync.Mutex
+	cond sync.Cond
+
 	heartbeat   *Heartbeat
 	lifecycle   *LifecycleState
+
+	listeners 	[]HealthListener
 
 	ctx        context.Context
 	cancelFunc context.CancelFunc
@@ -84,12 +112,11 @@ type Monitor struct {
 }
 
 func NewMonitor(heartbeat *Heartbeat, cfg Config) *Monitor {
-	healthChan := make(chan bool)
 	ctx, cancel := context.WithCancel(context.Background()) //TODO pass the context? So we can timeout?
 
 	return &Monitor{
-		healthChan: healthChan,
 		heartbeat:  heartbeat,
+		cond:	   sync.Cond{L: &sync.Mutex{}},
 		lifecycle:  NewLifecycleState(Stopped),
 		ctx:        ctx,
 		cancelFunc: cancel,
@@ -97,9 +124,30 @@ func NewMonitor(heartbeat *Heartbeat, cfg Config) *Monitor {
 	}
 }
 
+func (m *Monitor) RegisterListener(listener HealthListener) *Monitor {
+	m.listeners = append(m.listeners, listener)
+	
+	return m
+}
+
+func (m *Monitor) startListener(listener HealthListener) {
+	go func() {
+		m.cond.L.Lock()
+		defer m.cond.L.Unlock()
+		for !listener.ShouldTrigger(m.isHealthy()) {
+			m.cond.Wait()
+		}
+		listener.Trigger(m.isHealthy())
+	}()
+}
+
 func (m *Monitor) Start() error {
 	if m.lifecycle.State() == Started {
 		return ErrAlreadyStarted
+	}
+
+	for _, l := range m.listeners {
+		m.startListener(l)
 	}
 
 	m.wg.Add(1)
@@ -118,7 +166,7 @@ func (m *Monitor) Close() error {
 	}
 
 	m.cancelFunc()
-	m.wg.Wait()
+	m.wg.Wait() // TODO do I need a wg here?
 
 	if err := m.lifecycle.Stop(); err != nil {
 		return fmt.Errorf("failed to stop heartbeat monitor: %w", err)
@@ -127,14 +175,9 @@ func (m *Monitor) Close() error {
 	return nil
 }
 
-func (m *Monitor) HealthChan() <-chan bool {
-	return m.healthChan
-}
-
 func (m *Monitor) controlLoop(ctx context.Context) {
 	go func() {
 		defer m.wg.Done()
-		defer close(m.healthChan)
 		defer m.heartbeat.Close()
 
 		for {
@@ -151,22 +194,21 @@ func (m *Monitor) controlLoop(ctx context.Context) {
 }
 
 func (m *Monitor) sendIsHealthy(healthy bool) {
-	val := atomic.LoadInt32(&m.healthState)
+	m.cond.L.Lock()
+	defer m.cond.L.Unlock()
+	state := m.healthState
 
-	if (val == 1 && healthy) || (val == 2 && !healthy) {
+	if (state && healthy) || (!state && !healthy) {
 		// no status change, no need to send
 		return
 	}
 
-	if !atomic.CompareAndSwapInt32(&m.healthState, val, m.healthStateVal(healthy)) {
-		panic("failed to change healthstate")
-	}
+	m.healthState = healthy
+	m.cond.Broadcast()
+}
 
-	select {
-	case m.healthChan <- healthy:
-	case <-time.After(m.timeout):
-		panic("heartbeat monitor failed to report health status")
-	}
+func (m *Monitor) isHealthy() bool {
+	return m.healthState
 }
 
 func (m *Monitor) healthStateVal(healhy bool) int32 {
