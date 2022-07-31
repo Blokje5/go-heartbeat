@@ -8,25 +8,25 @@ import (
 	"time"
 )
 
-type HeartbeatConfig struct {
+type Config struct {
 	interval time.Duration
-	timeout time.Duration
+	timeout  time.Duration
 }
 
-func NewHeartBeatConfig(interval time.Duration, timeout time.Duration) HeartbeatConfig {
-	return HeartbeatConfig{
+func NewConfig(interval time.Duration, timeout time.Duration) Config {
+	return Config{
 		interval: interval,
-		timeout: timeout,
+		timeout:  timeout,
 	}
 }
 
 type Heartbeat struct {
 	heartbeatChan chan interface{}
-	ticker *time.Ticker
-	lifecycle *LifecycleState
+	ticker        *time.Ticker
+	lifecycle     *LifecycleState
 }
 
-func NewHeartbeat(cfg HeartbeatConfig) *Heartbeat {
+func New(cfg Config) *Heartbeat {
 	ticker := time.NewTicker(cfg.interval)
 
 	return newHeartbeat(ticker)
@@ -37,8 +37,8 @@ func newHeartbeat(ticker *time.Ticker) *Heartbeat {
 
 	return &Heartbeat{
 		heartbeatChan: heartbeatChan,
-		ticker: ticker,
-		lifecycle: NewLifecycleState(Started),
+		ticker:        ticker,
+		lifecycle:     NewLifecycleState(Started),
 	}
 }
 
@@ -70,35 +70,34 @@ func (h *Heartbeat) Close() error {
 	return nil
 }
 
-type HeartbeatMonitor struct {
-	healthChan chan bool
+type Monitor struct {
+	healthChan  chan bool
 	healthState int32
-	heartbeat *Heartbeat
-	lifecycle *LifecycleState
+	heartbeat   *Heartbeat
+	lifecycle   *LifecycleState
 
-	ctx context.Context
+	ctx        context.Context
 	cancelFunc context.CancelFunc
-	wg sync.WaitGroup
+	wg         sync.WaitGroup
 
 	timeout time.Duration
-
 }
 
-func NewHeartBeatMonitor(heartbeat *Heartbeat, cfg HeartbeatConfig) *HeartbeatMonitor {
+func NewMonitor(heartbeat *Heartbeat, cfg Config) *Monitor {
 	healthChan := make(chan bool)
 	ctx, cancel := context.WithCancel(context.Background()) //TODO pass the context? So we can timeout?
 
-	return &HeartbeatMonitor{
+	return &Monitor{
 		healthChan: healthChan,
-		heartbeat: heartbeat,
-		lifecycle: NewLifecycleState(Stopped),
-		ctx: ctx,
+		heartbeat:  heartbeat,
+		lifecycle:  NewLifecycleState(Stopped),
+		ctx:        ctx,
 		cancelFunc: cancel,
-		timeout: cfg.timeout,
+		timeout:    cfg.timeout,
 	}
 }
 
-func (m *HeartbeatMonitor) Start() error {
+func (m *Monitor) Start() error {
 	if m.lifecycle.State() == Started {
 		return ErrAlreadyStarted
 	}
@@ -113,26 +112,26 @@ func (m *HeartbeatMonitor) Start() error {
 	return nil
 }
 
-func (m *HeartbeatMonitor) Close() error {
+func (m *Monitor) Close() error {
 	if m.lifecycle.State() == Stopped {
 		return ErrAlreadyStopped
 	}
-	
+
 	m.cancelFunc()
 	m.wg.Wait()
 
 	if err := m.lifecycle.Stop(); err != nil {
 		return fmt.Errorf("failed to stop heartbeat monitor: %w", err)
 	}
-	
+
 	return nil
 }
 
-func (m *HeartbeatMonitor) HealthChan() <-chan bool {
+func (m *Monitor) HealthChan() <-chan bool {
 	return m.healthChan
 }
 
-func (m *HeartbeatMonitor) controlLoop(ctx context.Context) {
+func (m *Monitor) controlLoop(ctx context.Context) {
 	go func() {
 		defer m.wg.Done()
 		defer close(m.healthChan)
@@ -151,14 +150,13 @@ func (m *HeartbeatMonitor) controlLoop(ctx context.Context) {
 	}()
 }
 
-func (m *HeartbeatMonitor) sendIsHealthy(healthy bool) {
+func (m *Monitor) sendIsHealthy(healthy bool) {
 	val := atomic.LoadInt32(&m.healthState)
-	
+
 	if (val == 1 && healthy) || (val == 2 && !healthy) {
 		// no status change, no need to send
 		return
-	} 
-
+	}
 
 	if !atomic.CompareAndSwapInt32(&m.healthState, val, m.healthStateVal(healthy)) {
 		panic("failed to change healthstate")
@@ -171,7 +169,7 @@ func (m *HeartbeatMonitor) sendIsHealthy(healthy bool) {
 	}
 }
 
-func (m *HeartbeatMonitor) healthStateVal(healhy bool) int32 {
+func (m *Monitor) healthStateVal(healhy bool) int32 {
 	if healhy {
 		return 1
 	} else {

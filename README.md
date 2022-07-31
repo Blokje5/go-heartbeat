@@ -54,9 +54,9 @@ Instead what we want is to make sure we can restart the goroutine when it become
 Let's take the previous example and add a heartbeat + a heartbeat monitor (see examples/deadlock-with-heartbeat/main.go):
 
 ```golang
-cfg := heartbeat.NewHeartBeatConfig(100 * time.Millisecond, 200 * time.Millisecond)
-beat := heartbeat.NewHeartbeat(cfg)
-monitor := heartbeat.NewHeartBeatMonitor(beat, cfg)
+cfg := heartbeat.NewConfig(100 * time.Millisecond, 200 * time.Millisecond)
+beat := heartbeat.New(cfg)
+monitor := heartbeat.NewMonitor(beat, cfg)
 
 intStream := make(chan int)
 unreadStream := make(chan interface{})

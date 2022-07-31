@@ -11,14 +11,14 @@ import (
 func TestHeartbeatMonitor(t *testing.T) {
 	tests := []struct {
 		name            string
-		cfg             HeartbeatConfig
+		cfg             Config
 		testRunDuration time.Duration
 		runner          func(context.Context, *Heartbeat)
 		healthEvaluator func(context.Context, <-chan bool, *assert.Assertions) chan interface{}
 	}{
 		{
 			name:            "monitor should remain healthy with a well-behaving runner",
-			cfg:             NewHeartBeatConfig(100*time.Millisecond, 200*time.Millisecond),
+			cfg:             NewConfig(100*time.Millisecond, 200*time.Millisecond),
 			testRunDuration: 1 * time.Second,
 			runner: func(ctx context.Context, h *Heartbeat) {
 				for {
@@ -55,7 +55,7 @@ func TestHeartbeatMonitor(t *testing.T) {
 		},
 		{
 			name:            "monitor should remain send unhealthy once a heartbeat fails",
-			cfg:             NewHeartBeatConfig(100*time.Millisecond, 200*time.Millisecond),
+			cfg:             NewConfig(100*time.Millisecond, 200*time.Millisecond),
 			testRunDuration: 1 * time.Second,
 			runner: func(ctx context.Context, h *Heartbeat) {
 				heartbeatCount := 0
@@ -97,9 +97,9 @@ func TestHeartbeatMonitor(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			assertions := assert.New(t)
 
-			heartbeat := NewHeartbeat(tt.cfg)
+			heartbeat := New(tt.cfg)
 
-			monitor := NewHeartBeatMonitor(heartbeat, tt.cfg)
+			monitor := NewMonitor(heartbeat, tt.cfg)
 
 			ctx, cancelFunc := context.WithCancel(context.Background())
 
